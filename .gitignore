@@ -1,0 +1,5 @@
+# Run artifacts, produced beside a prompt set - never source.
+state/
+results/
+logs/
+report.html
