@@ -57,7 +57,7 @@ did what was asked **and** quietly refactored half the codebase, or that satisfi
 assertion while missing the point.
 
 `DiffReview` spawns a separate session that never saw the implementer's reasoning, hands it the
-prompt and the complete diff since the step's base commit, and asks three questions: did it do what
+prompt, its `Note` (as standing decisions that supersede the prompt), and the complete diff since the step's base commit, and asks three questions: did it do what
 was asked, did it do **more**, did it do **less**. It runs with `Edit`/`Write` disallowed — a
 reviewer that can edit is not a reviewer — and returns a structured verdict.
 
@@ -116,6 +116,7 @@ of that tier and the set does not rot.
 
 ## Per-prompt standing decisions
 
-`Note` on a prompt entry is appended to that session's protocol as **standing decisions** — for
+`Note` on a prompt entry is appended to that session's protocol as **standing decisions**, and is
+also handed to `DiffReview` — otherwise the reviewer fails a session for obeying it. It is for
 choices made after the set was written that supersede what the prompt says. Without it, a session
 reading a superseded instruction will faithfully "restore" behaviour the user deliberately changed.

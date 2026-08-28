@@ -158,6 +158,9 @@ function Get-SearchFiles([string]$Root, [string[]]$Include) {
         '*.csproj','*.sln','*.json','*.xml','*.bat','*.sh','*.props','*.sql','*.yml','*.yaml') }
     Get-ChildItem -Path $Root -Recurse -File -ErrorAction SilentlyContinue -Include $inc |
         Where-Object { $_.FullName -notmatch '\\(bin|obj|node_modules|dist|\.git|\.next|target)\\' -and
+                       # A git worktree under .claude is a second full checkout this run never
+                       # edits; without this a repo-rooted GrepZero can never go green.
+                       $_.FullName -notmatch '\\\.claude\\worktrees\\' -and
                        (-not $SetPathspec -or $_.FullName -notmatch [regex]::Escape($SetPathspec.Replace('/','\'))) }
 }
 
@@ -194,6 +197,17 @@ function Invoke-Gate {
             $promptFile = Get-ChildItem -Path $PromptsDir -Filter "$($Prompt.Id)-*.md" | Select-Object -First 1
             $brief = Get-Content -Raw $promptFile.FullName
 
+            # The reviewer must see the same standing decisions the implementer was given. Without
+            # this it fails a session for obeying a Note that deliberately supersedes the prompt -
+            # which is exactly what Note is for, so the gate contradicted the manifest.
+            $noteBlock = if ($Prompt.Note) { @"
+
+=== STANDING DECISIONS - authorised AFTER the task was written; they SUPERSEDE it ===
+Everything below was decided deliberately after this task was authored. It is PART OF THE TASK: a
+diff that follows it is correct, not scope creep. A diff that ignores it is incomplete.
+$($Prompt.Note)
+"@ } else { '' }
+
             $ask = @"
 You are reviewing someone else's change. You did not write it and you have none of their reasoning.
 
@@ -216,6 +230,7 @@ verdict:
 
 === TASK ===
 $brief
+$noteBlock
 
 === DIFF STAT ===
 $stat
@@ -280,6 +295,14 @@ $diff$truncated
             $safe = ($Gate.Run -replace '[^A-Za-z0-9]', '_')
             $safe = $safe.Substring(0, [Math]::Min(40, $safe.Length))
             $r = Invoke-Shell -WorkDir $where -CommandLine $Gate.Run -LogPath (Join-Path $GateLogDir "cmd-$safe.txt")
+
+            # The same transient the Build gate retries. It belongs here too: `Commands` holds one
+            # Build line, so a set spanning two solutions gates the second with Cmd - and then
+            # loses a whole attempt to a race that has nothing to do with the change under test.
+            if ($r.ExitCode -ne 0 -and $r.Output -match 'CS2001.*\.g\.cs') {
+                Say '    (transient intermediate state - re-running once)' 'DarkGray'
+                $r = Invoke-Shell -WorkDir $where -CommandLine $Gate.Run -LogPath (Join-Path $GateLogDir "cmd-$safe.txt")
+            }
             return New-GateResult "Cmd($($Gate.Run))" ($r.ExitCode -eq 0) $r.Tail
         }
 
@@ -721,7 +744,9 @@ foreach ($prompt in $selected) {
         $ps.attempts = $attempt
         $ps.sessionId = $session.SessionId
         $ps.model = $session.Model
-        if ($session.CostUsd) { $ps.costUsd = $session.CostUsd }
+        # Accumulate: a rolled-back attempt still cost money, and the ledger/report are what
+        # the user reads to understand spend. Overwriting hid every failed attempt.
+        if ($session.CostUsd) { $ps.costUsd = [double]$ps.costUsd + $session.CostUsd }
         Save-State $state
 
         if ($session.IsError) { Say "  session ended in error - see $sessionLog" 'Red' }
