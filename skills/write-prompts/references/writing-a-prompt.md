@@ -8,7 +8,14 @@ the file or it does not exist.
 
 Use `templates/prompt.md`. In order:
 
-**Header** — repo it edits, what it depends on, whether it is reorderable.
+**Header** — repo it edits, where the work is *expected* to land, what it depends on, whether it is
+reorderable. Write the folder list as an expectation, not a wall: *"expected to land in `src\Core\Bundles\`
+and `tests\`; other files in the repo may be touched when the asked work needs them (wiring, a
+shared type, a guard the task changes) — keep it minimal and name it in `decisions`"*. A fence
+tighter than the work is the single biggest source of `scope_creep` failures: in one real run four
+of eight steps were failed for a DI registration or a route mapping the task could not function
+without, each costing a re-gate cycle. Fence *behaviour* (what must not change) in **Out of
+scope**; do not fence *files* the task will obviously have to wire into.
 
 **Shared context, verbatim in every file.** Repos and which one this prompt edits, the fixed
 decisions, hazards and names that must not change, and the baseline verification commands. Yes, it is
@@ -62,6 +69,16 @@ along the way, and say which later prompt owns them.
 
 > Out of scope: the legacy `Connect()` helper in `Shared/PublicModule.cs` — P12 replaces it. Do not
 > reformat, rename or refactor anything you are not asked to change here.
+
+## Context discipline — what the prompt tells the session to read, and how
+
+A session pays for everything it has read on every later turn, and its judgement blurs with it.
+The prompt decides what enters the context, so say it: name the few files that are the
+**specification** and must be read in full, and tell the session to send everything else — a
+reference repository, a set of scripts to compare, a long log, a screenshot folder — to a subagent
+that comes back with a short answer. Ask for test output to go to a file, for the narrowest test
+filter while iterating and the full suite once at the end. The runner's protocol says the same to
+every session; the prompt's job is to name *which* files are the specification for this step.
 
 ## Writing for UI work
 

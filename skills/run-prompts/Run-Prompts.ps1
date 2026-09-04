@@ -154,8 +154,14 @@ function Resolve-RepoPath($key) {
 }
 
 function Get-SearchFiles([string]$Root, [string[]]$Include) {
+    # The default list is what a directory-scoped Grep gate can SEE. An extension missing from it
+    # does not narrow the gate, it silences it: GrepAtLeast fails over a folder it never opened, and
+    # - far worse - GrepZero passes over one, reporting "0 matches" for a file it never read. On
+    # Windows repos that bit .ps1/.cmd (deployment scripts) and .md (documentation), where a gate
+    # asserting "this sentence is gone" was green because it had searched nothing at all.
     $inc = if ($Include) { $Include } else { @('*.cs','*.ts','*.tsx','*.js','*.jsx','*.py','*.go','*.rs',
-        '*.csproj','*.sln','*.json','*.xml','*.bat','*.sh','*.props','*.sql','*.yml','*.yaml') }
+        '*.csproj','*.sln','*.json','*.xml','*.bat','*.sh','*.props','*.sql','*.yml','*.yaml',
+        '*.ps1','*.psm1','*.psd1','*.cmd','*.md') }
     Get-ChildItem -Path $Root -Recurse -File -ErrorAction SilentlyContinue -Include $inc |
         Where-Object { $_.FullName -notmatch '\\(bin|obj|node_modules|dist|\.git|\.next|target)\\' -and
                        # A git worktree under .claude is a second full checkout this run never
@@ -208,29 +214,62 @@ diff that follows it is correct, not scope creep. A diff that ignores it is inco
 $($Prompt.Note)
 "@ } else { '' }
 
+            # The implementer's own report - summary, changed files, deviations, decisions and (after
+            # a scope trim) scope_justification - is what tells a reviewer that an edit outside the
+            # prompt's expected folders was the wiring the asked work could not function without (a
+            # DI registration, a route mapping, a shared record) rather than a drive-by. Without it,
+            # four of eight steps in one real run were failed for exactly such edits, each costing a
+            # full re-gate cycle. The reviewer is told these are claims to check against the diff.
+            $notesBlock = ''
+            $resultFile = Join-Path $ResultsDir "$($Prompt.Id).json"
+            if (Test-Path $resultFile) {
+                try {
+                    $rj = Get-Content -Raw $resultFile | ConvertFrom-Json
+                    $lines = @()
+                    if ($rj.summary)             { $lines += "summary: $($rj.summary)" }
+                    if ($rj.changed_files)       { $lines += 'changed_files: ' + (@($rj.changed_files) -join ', ') }
+                    if ($rj.deviations)          { $lines += "deviations:`n" + ((@($rj.deviations) | ForEach-Object { "  - $_" }) -join "`n") }
+                    if ($rj.decisions)           { $lines += "decisions:`n" + ((@($rj.decisions) | ForEach-Object { "  - $_" }) -join "`n") }
+                    if ($rj.scope_justification) { $lines += "scope_justification (why out-of-fence edits were kept):`n" + ((@($rj.scope_justification) | ForEach-Object { "  - $_" }) -join "`n") }
+                    if ($lines.Count) {
+                        $notesBlock = "`n=== IMPLEMENTER'S REPORT - their claims; check each against the diff, do not take it on faith ===`n" + ($lines -join "`n") + "`n"
+                    }
+                }
+                catch { }
+            }
+
             $ask = @"
 You are reviewing someone else's change. You did not write it and you have none of their reasoning.
 
 Below is the task they were given, then the complete diff they produced. Answer three questions:
 
 1. Does the diff do what the task asked?
-2. Does it do MORE than was asked - unrequested refactors, renames, reformatting, drive-by edits,
-   files touched for no reason the task implies? That is scope creep and it is a FAILURE, however
-   good the extra work looks. A change nobody asked for is a change nobody reviewed.
+2. Does it do MORE than was asked? Two things look alike here and only one is a failure:
+   - NECESSARY WIRING: an edit outside the folders the task names that the asked work cannot
+     function without - a DI registration, a route mapping, a shared record or contract, a guard
+     test updated because the task changed what it pins, a test fixture. Minimal, in plain service
+     of the task, and explained in the implementer's report. That is NOT scope creep: name it in
+     findings and still return ok.
+   - SCOPE CREEP: unrequested refactors, renames, reformatting, "while I was here" fixes, behaviour
+     changes to things the task did not name, files touched for no reason the task implies. That is
+     a FAILURE however good the extra work looks - a change nobody asked for is a change nobody
+     reviewed. When the report claims an edit was necessary and the diff shows it was not, it is
+     creep; say which.
 3. Does it do LESS - an acceptance criterion the diff plainly cannot satisfy?
 
 Judge only the diff against the task. Do not run anything, do not open other files, do not fix
-anything. Style you merely dislike is not a finding. Be specific: name files and say what is wrong.
+anything. Style you merely dislike is not a finding. Be specific: name files and say what is wrong,
+and for scope_creep name EVERY file or hunk that must go - a trim pass will act on your list.
 
 verdict:
-  ok         - does what was asked, nothing more, nothing less
-  scope_creep- also changed things the task did not ask for
+  ok         - does what was asked, plus at most the necessary wiring above
+  scope_creep- also changed things the task neither asked for nor needed
   incomplete - an acceptance criterion is plainly unmet by this diff
   wrong      - does something other than what the task asked
 
 === TASK ===
 $brief
-$noteBlock
+$noteBlock$notesBlock
 
 === DIFF STAT ===
 $stat
@@ -328,11 +367,14 @@ $diff$truncated
             $target = Join-Path (Resolve-RepoPath $Gate.In) $Gate.Path
             $files = Get-SearchFiles $target $Gate.Include
             # Commented-out lines are stripped first: dead code left by a conversion carries the same
-            # literals and would flag a file that is actually correct.
+            # literals and would flag a file that is actually correct. Block-comment bodies count as
+            # comments too - a JSDoc line stating the very rule a GrepZero enforces ("cmd.exe is never
+            # used", "never disable TLS verification") is prose, not a violation, and stripping only
+            # `//` made such a file fail the gate it actually complies with.
             $hits = @()
             foreach ($f in $files) {
                 $text = (Get-Content $f.FullName -ErrorAction SilentlyContinue |
-                    Where-Object { $_.TrimStart() -notmatch '^(//|#|--)' }) -join "`n"
+                    Where-Object { $_.TrimStart() -notmatch '^(//|#|--|\*|/\*)' }) -join "`n"
                 if ($text -match $Gate.Pattern) { $hits += $f.FullName }
             }
             $detail = if ($hits.Count) { ($hits | Select-Object -First 8) -join "`n" } else { 'no matches' }
@@ -435,6 +477,17 @@ Everything below overrides your own judgement about scope.
   Do the right thing and record what you changed in "deviations". Never bend the codebase to match
   a mistaken instruction, and never implement something you can see is wrong.
 - Verify your own work against the prompt's acceptance criteria before you finish.
+- CONTEXT DISCIPLINE. Everything you pull into this conversation is re-sent on EVERY later turn, so
+  a session's cost and its attention both degrade with what it has swallowed, not with what it
+  wrote (measured on real runs of this harness: over 90% of the spend was re-reading context, the
+  output under 5%). So: (1) delegate bulk reading to subagents - the Agent tool, an Explore agent
+  for searches - and take back a short answer: a codebase survey, a long log, a set of reference
+  scripts, a screenshot folder; (2) never print a build or test log into the conversation -
+  redirect it to a file and read its tail or grep it for the failures; (3) while iterating, run the
+  narrowest test filter that covers what you changed, and the full suite once at the end; (4) do
+  not re-read a file you already read unless you changed it; (5) open a screenshot only when the
+  prompt asks you to judge what it shows. None of this lowers the bar - the gates, the full suite
+  and the diff review still run on the finished tree - it keeps your attention on the work.
 $smokeLine
 - Your LAST action is to write $ResultsDir\$($Prompt.Id).json with exactly this shape:
   {
@@ -534,6 +587,77 @@ function Invoke-PromptSession {
         NumTurns  = if ($parsed) { $parsed.num_turns } else { $null }
         Model     = $model
         Effort    = $effort
+    }
+}
+
+# The scope-trim session. Deliberately NOT the prompt's model/effort: the work is finished and
+# green, and the whole job is to delete or justify the hunks the reviewer named. It is handed the
+# prompt (so it knows what was asked), the reviewer's findings, and the base commit to diff against.
+function Invoke-TrimSession {
+    param($Prompt, [string]$RepoPath, [string[]]$OtherRepos, [string]$SessionLog,
+          [string]$BaseCommit, [string]$Findings)
+
+    $sessionId = [guid]::NewGuid().ToString()
+    $promptFile = Get-ChildItem -Path $PromptsDir -Filter "$($Prompt.Id)-*.md" | Select-Object -First 1
+    $others = if ($OtherRepos) { $OtherRepos -join ', ' } else { '(none)' }
+    $resultFile = Join-Path $ResultsDir "$($Prompt.Id).json"
+
+    $protocol = @"
+SCOPE TRIM - an automated run. The work for step $($Prompt.Id) is DONE: it passes the build, the tests
+and every prompt-specific assertion. An independent reviewer, reading only the diff against the
+task, failed it for SCOPE CREEP with the findings below. You are a cheap, narrow pass whose only job
+is to make the diff match the task - not to redo, improve or extend anything.
+
+- Working repo: $RepoPath. Base commit: $BaseCommit. Do NOT edit anything under: $others.
+- Read the findings, then ``git diff $BaseCommit`` (read-only git only: diff, show, status, log).
+- For EACH finding, do exactly one of:
+  (a) REVERT it. When a whole file's change is creep, ``git checkout $BaseCommit -- <file>`` (delete
+      the file instead if it did not exist at the base). When only a hunk is creep, edit it back by
+      hand to the base version. Then re-run the build and the tests named in the task's
+      verification baseline to prove the revert broke nothing.
+  (b) KEEP it, ONLY because the asked work cannot function without it (a DI registration, a route
+      mapping, a shared contract, a guard the task itself changed). Then add or extend a
+      ``scope_justification`` array in $resultFile with one sentence per kept item naming what
+      breaks without it. Vague justifications ("it is cleaner") do not count - revert instead.
+- Touch nothing the findings do not name. Do NOT run: git commit, git tag, git branch, git reset,
+  git stash. Update ``changed_files`` in $resultFile to match the tree, keep its status as is, and
+  leave everything else in it untouched. The runner re-runs every gate after you.
+
+=== REVIEWER FINDINGS ===
+$Findings
+"@
+
+    $model = if ($M.TrimModel) { $M.TrimModel } else { 'sonnet' }
+    $cli = @(
+        '-p'
+        '--model', $model
+        '--effort', 'medium'
+        '--permission-mode', 'bypassPermissions'
+        '--output-format', 'json'
+        '--session-id', $sessionId
+        '--append-system-prompt', $protocol
+    )
+    foreach ($o in $OtherRepos) { $cli += @('--add-dir', $o) }
+
+    Say "  trim session $sessionId ($model / medium)" 'DarkGray'
+    $claude = Get-ClaudeExe
+    Push-Location $RepoPath
+    try {
+        $raw = Get-Content -Raw $promptFile.FullName | & $claude @cli 2>&1 | Out-String
+        $code = $LASTEXITCODE
+    }
+    finally { Pop-Location }
+
+    $raw | Set-Content -Path $SessionLog -Encoding UTF8
+    $parsed = $null
+    try { $parsed = $raw | ConvertFrom-Json } catch { }
+
+    return [pscustomobject]@{
+        SessionId = $sessionId
+        ExitCode  = $code
+        IsError   = if ($parsed) { [bool]$parsed.is_error } else { $code -ne 0 }
+        CostUsd   = if ($parsed) { $parsed.total_cost_usd } else { $null }
+        NumTurns  = if ($parsed) { $parsed.num_turns } else { $null }
     }
 }
 
@@ -703,7 +827,12 @@ if ($DryRun) {
 # ---------------------------------------------------------------- the run
 
 $state = Get-State
-foreach ($k in $M.Repos.Keys) { Confirm-Branch $M.Repos[$k] }
+# Only branch the repos a prompt actually EDITS. A repo listed purely as reference material is
+# attached read-only with --add-dir, and checking a branch out inside it moves whatever the user
+# had uncommitted there onto a branch of this set's name - a visible edit to a repo the prompts
+# declare untouchable.
+$editedRepos = @($M.Prompts | ForEach-Object { Resolve-RepoPath $_.Repo } | Sort-Object -Unique)
+foreach ($r in $editedRepos) { Confirm-Branch $r }
 
 foreach ($prompt in $selected) {
     $index = [array]::IndexOf([string[]]($M.Prompts.Id), $prompt.Id) + 1
@@ -745,8 +874,10 @@ foreach ($prompt in $selected) {
         $ps.sessionId = $session.SessionId
         $ps.model = $session.Model
         # Accumulate: a rolled-back attempt still cost money, and the ledger/report are what
-        # the user reads to understand spend. Overwriting hid every failed attempt.
+        # the user reads to understand spend. Overwriting hid every failed attempt. The per-attempt
+        # list is what answers "how much did the retry cost" without opening the session logs.
         if ($session.CostUsd) { $ps.costUsd = [double]$ps.costUsd + $session.CostUsd }
+        $ps.attemptCosts = @(@($ps.attemptCosts) + @([double]$session.CostUsd))
         Save-State $state
 
         if ($session.IsError) { Say "  session ended in error - see $sessionLog" 'Red' }
@@ -768,6 +899,46 @@ foreach ($prompt in $selected) {
 
         $failed = @($gateResults | Where-Object { -not $_.Ok })
         if ($failed.Count -eq 0) { $passed = $true; break }
+
+        # SCOPE TRIM. When the ONLY failure is the reviewer's scope_creep verdict - every mechanical
+        # gate is green, the work is done - a full retry session at the prompt's model and effort is
+        # the wrong tool: it re-reads the whole prompt and codebase to delete a few hunks. A cheap
+        # trim session removes exactly what the reviewer named, or justifies what has to stay, and
+        # the gates re-run. One trim per prompt; if it does not settle the verdict, the ordinary
+        # retry follows with the verbatim failure as before.
+        $onlyCreep = ($failed.Count -eq 1) -and ($failed[0].Name -eq 'DiffReview') -and
+                     ($failed[0].Detail -match '^verdict=scope_creep')
+        if ($onlyCreep -and -not $ps.trimmed) {
+            $ps.trimmed = $true
+            Say '  only DiffReview failed (scope_creep) - running a scope trim instead of a full retry' 'Yellow'
+            $trimLog = Join-Path $gateLogDir "trim-$attempt.json"
+            $failed[0].Detail | Set-Content -Path (Join-Path $gateLogDir "scope-creep-$attempt.txt") -Encoding UTF8
+
+            $trim = Invoke-TrimSession -Prompt $prompt -RepoPath $repoPath -OtherRepos $otherRepos `
+                -SessionLog $trimLog -BaseCommit $ps.baseCommit -Findings $failed[0].Detail
+            if ($trim.CostUsd) {
+                $ps.costUsd = [double]$ps.costUsd + $trim.CostUsd
+                $ps.trimCostUsd = [double]$ps.trimCostUsd + $trim.CostUsd
+            }
+            Save-State $state
+            if ($trim.IsError) { Say "  trim session ended in error - see $trimLog" 'Red' }
+            Say ("  trim done: {0} turns, {1}" -f $trim.NumTurns,
+                $(if ($trim.CostUsd) { '${0:N2}' -f $trim.CostUsd } else { 'cost n/a' })) 'DarkGray'
+
+            $gateResults = @(Test-ResultsFile $prompt.Id)
+            foreach ($g in $prompt.Gates) {
+                $gateResults += Invoke-Gate -Gate $g -Prompt $prompt -RepoPath $repoPath `
+                    -GateLogDir $gateLogDir -BaseCommit $ps.baseCommit
+            }
+            Say ''
+            foreach ($g in $gateResults) {
+                if ($g.Ok) { Say ("    PASS  {0}" -f $g.Name) 'Green' }
+                else { Say ("    FAIL  {0}" -f $g.Name) 'Red'; Say ("          {0}" -f $g.Detail) 'DarkRed' }
+            }
+            Say ''
+            $failed = @($gateResults | Where-Object { -not $_.Ok })
+            if ($failed.Count -eq 0) { $passed = $true; break }
+        }
 
         $failureReport = ($failed | ForEach-Object { "GATE {0} FAILED:`n{1}" -f $_.Name, $_.Detail }) -join "`n`n"
         $failureReport | Set-Content -Path (Join-Path $gateLogDir "gate-failure-$attempt.txt") -Encoding UTF8

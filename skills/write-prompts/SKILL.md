@@ -68,6 +68,15 @@ Split only where there is a reason: it crosses a rollback boundary, it exceeds o
 context, it produces something a later step depends on, or it needs a different kind of verification.
 Otherwise **merge**. Three good prompts beat ten fragments.
 
+**But size a step by the session it will need, not by the feature.** Every turn re-sends the whole
+conversation, so a session's cost grows with turns × what it has swallowed, and its attention
+degrades the same way. A step that will plainly run past ~300 turns — two engines in one prompt, a
+screen plus the harness that drives it, a port of six scripts — is split at its natural seam with
+an explicit handoff, even when the pieces "belong together". Measured: one 1,500-turn step cost
+more than the other three of its batch combined and produced no better code. Splitting is not free
+either (each session re-reads the codebase cold and pays the gates and the review), so the seam
+must be real: a contract, a file boundary, a different kind of verification.
+
 Order so that things others depend on come first, and mark reorderable ones as such.
 
 **End the set with an audit step** — a final prompt that checks the composed result end to end and

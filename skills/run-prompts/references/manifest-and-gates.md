@@ -10,6 +10,7 @@
     Model       = 'opus'                 # default; ALIASES only, never pinned ids
     Effort      = 'high'
     ReviewModel = 'sonnet'               # DiffReview default
+    TrimModel   = 'sonnet'               # the scope-trim session (default sonnet / medium)
     AppExe      = 'src\bin\Debug\net10.0-windows\App.exe'   # omit for web projects
     Commands    = @{
         Build = 'dotnet build App.sln --nologo -v minimal'
@@ -77,6 +78,24 @@ to read a diff) and it is the only thing standing between you and unreviewed dri
 only for prompts that produce no diff worth reading — a migration file, a document.
 
 Very large diffs are truncated at `MaxChars` (default 180 000) and the reviewer judges what it sees.
+
+### What the reviewer is given, and the scope trim
+
+The reviewer sees the prompt, the `Note`, the diff, **and the implementer's own results file**
+(`summary`, `changed_files`, `deviations`, `decisions`, and `scope_justification` after a trim). It
+is told to treat those as claims to check against the diff, and to distinguish two things that look
+alike: **necessary wiring** outside the prompt's expected folders (a DI registration, a route
+mapping, a shared contract, a guard the task itself changed — minimal and explained) is *not* creep;
+refactors, renames, reformatting and "while I was here" fixes are.
+
+When a step's **only** failing gate is `DiffReview` with `scope_creep`, the runner does not spend a
+full retry. It runs one **scope-trim session** (`TrimModel`, default `sonnet` / `medium`) whose whole
+job is to revert the hunks the reviewer named — or keep one and write a `scope_justification` line
+saying what breaks without it — then re-runs every gate. If the verdict still stands, the ordinary
+retry follows. One trim per prompt; its cost lands in `state.json` as `trimCostUsd`, and every
+attempt's cost is kept in `attemptCosts`. Measured on a real run: the creep verdicts were mostly
+necessary wiring, and the retries they forced were the second-largest cost after the sessions
+themselves.
 
 ## Writing gates that actually catch things
 

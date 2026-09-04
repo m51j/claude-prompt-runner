@@ -77,6 +77,12 @@ they are your job:
   `git diff <baseCommit>..` yourself before moving on.
 - **Coherence.** Per-step gates prove each step in isolation, never that the steps fit together. That
   is what the set's final audit prompt is for; if the set lacks one, do the check yourself at the end.
+- **Context bloat.** Every turn re-sends the whole conversation, so a session that swallowed its test
+  logs and every reference file pays for them on every later turn and thinks worse for it. The
+  protocol now tells sessions to delegate bulk reading to subagents, keep logs in files, and run the
+  narrow tests while iterating. Watch `state.json` (`attemptCosts`) and the session's
+  `cache_read_input_tokens`: a step whose cost is far out of line with its output is one that should
+  have been split or that ignored the discipline - read its log before running the next.
 
 ## References
 

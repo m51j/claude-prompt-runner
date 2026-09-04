@@ -2,8 +2,10 @@
 
 ## When a step fails its gates
 
-The runner has already retried once with the verbatim failure text, then `git reset --hard` to the
-step's base commit and `git clean -fd`. Nothing downstream ran, because the chain depends on it.
+The runner has already retried once with the verbatim failure text (a retry is a fix-up session on
+the same tree, not a fresh start — and a creep-only failure got a scope-trim first), then
+`git reset --hard` to the step's base commit and `git clean -fd`. Nothing downstream ran, because
+the chain depends on it.
 
 Read `logs/<Id>/gate-failure-*.txt` and the session log, then decide **which of three things is
 wrong** — this is the judgement the runner cannot make:
@@ -29,9 +31,15 @@ claude --resume <sessionId>
 
 ## Reading a DiffReview failure
 
-`scope_creep` almost always means the prompt's **Out of scope** section was too vague, not that the
-session was reckless. The fix is usually a sharper boundary in the prompt plus `-Force`, rather than
-dropping the gate.
+`scope_creep` used to mean, almost always, a prompt whose folder fence was tighter than the work:
+four of eight steps in one real run were failed for a DI registration or a route mapping the task
+could not function without. Two things now stand between that and a rollback: the reviewer is
+given the implementer's report and told that *necessary wiring* is not creep, and a `scope_creep`
+that is the only failing gate triggers a cheap **scope-trim** session (revert what was named, or
+justify it in `scope_justification`) before any full retry. Read `logs/<Id>/scope-creep-*.txt` and
+`trim-*.json` to see what it did. If a step still fails on creep after the trim, the diff really
+does carry unrequested work: sharpen the prompt's **Out of scope** (name the neighbouring thing and
+which step owns it) and `-Force`, rather than dropping the gate.
 
 `incomplete` and `wrong` mean the reviewer thinks the diff does not satisfy the task. Check it
 yourself before acting — the reviewer sees only the diff and the prompt, so a change that is correct

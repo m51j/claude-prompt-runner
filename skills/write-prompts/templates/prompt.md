@@ -1,6 +1,6 @@
 # P01 — <short title, imperative>
 
-**Repo:** <repo key from the manifest>
+**Repo:** <repo key> — expected to land in <folders>; other files in this repo may be touched when the asked work needs them (wiring, a shared type, a guard the task changes) — keep it minimal and name it in `decisions`
 **Depends on:** <P.. ids, or "nothing"> · <*reorderable* if it can run any time after its deps>
 
 ---
@@ -26,6 +26,11 @@ Hazards — names and files that must not change:
 
 Verification baseline: <build command> must be green after every prompt, and <test command>
 where tests are touched. Do not commit — the runner commits.
+
+Context discipline: read in full only the files a prompt names as its specification; delegate bulk
+reading (reference repos, logs, screenshot folders, script comparisons) to subagents that return a
+short answer; redirect build/test output to files and read the tail; narrowest test filter while
+iterating, the full suite once at the end.
 ```
 
 ---
