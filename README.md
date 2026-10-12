@@ -3,7 +3,8 @@
 Two Claude Code skills for work that is too big for one session.
 
 **`write-prompts`** breaks the work into a numbered set of prompts.
-**`run-prompts`** executes them — each in its own fresh session, each verified, each committed.
+**`run-prompts`** executes them — each in its own fresh session, each verified, each audited, each
+committed.
 
 The point is not automation for its own sake. It is that **an agent's own report of success is
 worth very little**, and this puts something between that report and your codebase.
@@ -97,6 +98,9 @@ run is interrupted.
 3. **The gates run — performed by the runner, not claimed by the session.**
 4. Green → commit and tag. Red → one retry fed the verbatim failure, then `git reset --hard` and
    stop. Nothing downstream runs, because the chain depends on it.
+5. **Independent audit** (on by default): a fresh read-only session hunts the committed step for
+   real defects; a fix session reproduces each with a failing test and fixes it — or drops it; the
+   gates re-run; the fixes land in their own `fix(Pxx-audit)` commit.
 
 ### Gates
 
@@ -124,6 +128,32 @@ full diff, and asks: did it do what was asked, did it do *more*, did it do *less
 
 Scope creep fails the step, however good the extra work looks. A change nobody asked for is a change
 nobody reviewed.
+
+### The independent audit
+
+Gates prove assertions and `DiffReview` proves the diff matches the task. **Neither asks whether the
+code is right.** On the project where this was first done by hand, a fresh audit after each step
+found real defects in almost every step the gates had passed — data loss, wrong calculations, undo
+that did not undo, migrations that broke old files, tests that asserted nothing. Projects run without
+it carried the same classes of defect silently; they only *looked* cleaner because nobody looked.
+
+So after each step commits:
+
+1. **Audit** — a fresh session with `Edit`/`Write` disallowed reads the change cold. It may run the
+   build, the tests and reproduction scripts, and returns structured findings: severity, file:line,
+   the problem, a concrete reproduction, a suggested fix. *Zero findings is a valid answer*; style and
+   refactor wishes are not findings.
+2. **Fix** — a second session must first reproduce each finding with a test that fails, then make the
+   smallest fix. A finding it cannot reproduce is **dropped** with the reason. That is the guard
+   against an auditor that invents defects to have something to say.
+3. **Gates again**, then a separate `fix(Pxx-audit)` commit listing every fixed finding — so the step
+   and its fixes can be reverted independently.
+
+If the fixes fail the gates twice, the step stays committed, the fixes are saved as a patch, and the
+run stops in `AUDIT_FAILED` for you to decide. Steps that change only documentation skip the audit by
+themselves; `write-prompts` proposes any other exceptions (research notes, logic-free assets) and asks
+you once. Off per step with `Audit=$false; AuditSkip='why'`, per set with `Audit=$false`, per run with
+`-NoAudit`. Budget roughly double the per-step cost.
 
 ### Tiers
 
@@ -177,6 +207,7 @@ regenerates at any moment and stays honest if the run stopped half way.
 | مواضع خالف فيها الواقعُ البرومبت | where the prompt turned out to be wrong |
 | ما لم يُثبَت | what is still **not** proven |
 | خيارات وأعمال لاحقة | what was deliberately left |
+| ما وجده التدقيق المستقل | every defect the audit found — fixed (with the test that proves it), dropped (with the reason), or not fixed |
 
 To generate it in another language, edit `New-Report.ps1` — the section headings are literals near
 the top.
@@ -207,7 +238,8 @@ routinely the one that needs judgement once a session opens the file.
 
 **End every set with an audit step.** Per-step gates prove each step in isolation, never that the
 steps cohere. In the run these skills came from, that final step found a data-loss bug none of the
-previous twenty-two had noticed.
+previous twenty-two had noticed. The per-step audit does not replace it: one reads a step, the other
+reads the whole.
 
 ---
 

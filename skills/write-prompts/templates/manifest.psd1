@@ -38,6 +38,13 @@
       no code at all (docs, report) -> haiku   / low      is acceptable
 
     NEVER give haiku a prompt that writes or modifies code, however trivial it looks.
+
+    INDEPENDENT AUDIT - ON by default, not listed as a gate. After each step commits, a fresh
+    read-only session hunts for real defects; a fix session reproduces each with a failing test and
+    fixes it or drops it; the gates re-run; the fixes land in a separate fix(Pxx-audit) commit.
+    Turn it off ONLY where there is nothing to find, and say why (the reason reaches the report):
+      Audit=$false; AuditSkip='research notes only, no code'
+    Keep it on for anything that writes code, migrations, schema or behaviour-changing config.
 #>
 @{
     Name        = '<task-name>'
@@ -50,6 +57,7 @@
     PromptsDir  = 'prompts'
     Model       = 'opus'
     Effort      = 'high'
+    # AuditBrief = 'audit-brief.md'   # optional project-specific notes for the auditor
 
     # Desktop only. Omit entirely for web projects.
     # AppExe    = '<src\bin\Debug\net10.0-windows\App.exe>'
@@ -80,6 +88,12 @@
         # Desktop step: prove it really runs.
         # @{ Id='P03'; Repo='main'; Tier='C'; Title='<...>'
         #    Gates=@( @{Type='Build'}, @{Type='Test'}, @{Type='Smoke'; Scenario='Start'} ) },
+
+        # No code: nothing for the audit to find. Propose this to the user; do not decide it alone.
+        # @{ Id='P03'; Repo='main'; Tier='A'; Title='<research: compare the options>'
+        #    Model='sonnet'; Effort='medium'
+        #    Audit=$false; AuditSkip='<research notes only, no code>'
+        #    Gates=@( @{ Type='FileExists'; Path='<docs/research/options.md>' } ) },
 
         # Needs a person. Say why in the prompt's Acceptance section.
         # @{ Id='P04'; Repo='main'; Tier='D'; Title='<...>'

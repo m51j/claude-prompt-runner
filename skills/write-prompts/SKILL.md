@@ -1,9 +1,9 @@
 ---
 name: write-prompts
-description: Turn a large piece of work into a numbered set of English prompts plus a manifest and a run command, so an agent can execute them one at a time with verification gates, a diff review, and a commit per step. The user describes what they want in Arabic or English; the output prompts are always English. Use when the user asks to break work into prompts, says "اكتب برومبتات" / "write prompts for", plans a migration, port, refactor or feature too big for one session, or asks to prepare work for the run-prompts skill. Do NOT use for work that fits in one session.
+description: Turn a large piece of work into a numbered set of English prompts plus a manifest and a run command, so an agent can execute them one at a time with verification gates, a diff review, an independent per-step audit (on by default; it proposes which steps to exclude), and a commit per step. The user describes what they want in Arabic or English; the output prompts are always English. Use when the user asks to break work into prompts, says "اكتب برومبتات" / "write prompts for", plans a migration, port, refactor or feature too big for one session, or asks to prepare work for the run-prompts skill. Do NOT use for work that fits in one session.
 compatibility: Produces a set for the `run-prompts` skill, which needs the `claude` CLI, git and PowerShell 7.
 metadata:
-  version: 1.1
+  version: 1.2
 ---
 
 # Authoring a prompt set
@@ -82,7 +82,8 @@ Order so that things others depend on come first, and mark reorderable ones as s
 **End the set with an audit step** — a final prompt that checks the composed result end to end and
 writes documentation. Per-step gates prove each step in isolation, never that the steps cohere. In
 the run this skill came from, that last step found a data-loss bug none of the previous twenty-two
-had noticed.
+had noticed. The runner's per-step independent audit (below) does not replace it: that audit reads
+one step, this one reads the whole.
 
 ## Step 5 — write the prompts and the manifest
 
@@ -93,6 +94,35 @@ One file per prompt, `P01-short-slug.md`, in `prompts/`, from `templates/prompt.
 - [references/manifest-and-gates.md](references/manifest-and-gates.md) — the schema, choosing gates
   that actually catch a false PASS, tiers, and per-prompt model/effort.
 
+### The independent audit — on by default, propose the exceptions
+
+The runner audits every committed step: a fresh read-only session hunts for real defects, a fix
+session reproduces each with a failing test and fixes it (or drops it), and the fixes land in their
+own commit. It is **on by default** — you do not add it. It roughly doubles a step's cost, and it is
+why a set's result is trustworthy rather than merely green: on the project where it was first done,
+it found real defects in almost every step the gates had passed.
+
+Your job is the exceptions. Go through the prompts and mark a step `Audit=$false` with an
+`AuditSkip='<reason>'` **only** when an audit has nothing to find:
+
+| Skip the audit | Keep it |
+|---|---|
+| research or decision notes, no code | any step that writes or changes code — however small |
+| documentation, screenshots, a report | migrations, schema or data changes |
+| pure asset generation with no logic in it | configuration that changes behaviour (CI, build, deploy) |
+| | the final audit step if it is allowed to fix code |
+
+(A step whose diff turns out to be documentation only is skipped by the runner automatically; mark
+it anyway when you know, so the plan is visible.) When in doubt, keep it.
+
+If the project has something an auditor must know — the defects that matter most in this domain
+(e.g. units, money, data loss in a file format), customer data never to copy, dev-server ports,
+areas a fixer must not touch — write it as `audit-brief.md` in the set folder and set
+`AuditBrief = 'audit-brief.md'` in the manifest. Keep it short; the runner already supplies the
+generic audit instructions.
+
+You **propose** the exceptions in Step 6; the user decides.
+
 ## Step 6 — RUN.md and the recommendation
 
 Write `RUN.md` from `templates/RUN.md`: the one message the user pastes into a fresh session to start
@@ -100,6 +130,11 @@ execution. Then tell them, in their language:
 
 - how many prompts, and why that many rather than more or fewer
 - which steps will stop for them, and what each stop needs
+- **the audit plan.** If you marked any step `Audit=$false`, list those steps with the reason for
+  each and ask once (`AskUserQuestion`: accept the proposal / audit every step / choose myself) —
+  this is the one question allowed after the set is written, because it trades the user's money
+  against the result's quality. Apply the answer to the manifest. If no step is excluded, just say
+  the audit runs on every step and roughly doubles the per-step cost — no question.
 - **which model and effort to run the orchestrator on** — usually `opus` / `high`; `xhigh` if the set
   is architectural or the codebase is unfamiliar
 - a rough sense of scale (a 23-prompt set on a large codebase ran to a few hours)
@@ -110,6 +145,7 @@ execution. Then tell them, in their language:
 <set-folder>/
 ├── manifest.psd1
 ├── RUN.md
+├── audit-brief.md      optional: project-specific notes for the per-step audit
 ├── .gitignore          state/ results/ logs/ report.html
 └── prompts/
     ├── P01-....md

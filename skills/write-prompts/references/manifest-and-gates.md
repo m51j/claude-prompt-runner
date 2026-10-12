@@ -38,6 +38,23 @@ It costs one cheap extra session per prompt. Omit it only where there is no diff
 migration file, a document. Its usefulness is directly proportional to how well you wrote *Out of
 scope*, so write that section properly.
 
+## The independent audit is on — mark only the exceptions
+
+The runner audits every committed step by default (a fresh read-only auditor, a test-first fix
+session, the gates again, a separate `fix(Pxx-audit)` commit). You do not list it as a gate. Mark a
+step off only when there is nothing for an auditor to find, and always say why:
+
+```powershell
+@{ Id='P02'; ...; Audit=$false; AuditSkip='research notes only, no code' }
+```
+
+Research, decision notes, documentation and logic-free assets are the usual exceptions; anything that
+writes code, migrations, schema or behaviour-changing configuration keeps it. A project-specific
+brief for the auditor goes in `audit-brief.md` with `AuditBrief = 'audit-brief.md'` at the top of
+the manifest. Model keys (`AuditModel`, `AuditFixModel`, default `opus` / `high`) rarely need
+changing — a weak auditor finds little and invents more. Full detail:
+`~/.claude/skills/run-prompts/references/manifest-and-gates.md`, "The independent audit".
+
 ## Tiers — be stingy with the ones that stop
 
 | Tier | Use when |

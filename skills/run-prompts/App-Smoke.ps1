@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Launch, inspect, drive and screenshot a Windows desktop app (WPF or WinForms) for verification.
 
@@ -16,6 +16,7 @@
       Inspect         dump the UI Automation element tree of a running app's windows as text
       Invoke/SetText  act on a control by AutomationId or by its visible label
       Click           a real cursor click at screen coordinates
+      Hover           move the real cursor onto an element (by AutomationId/Name) or to -X/-Y; no click
       Keys            focus the app's main window and send keystrokes
       Screenshot      full-screen PNG (open it with the Read tool - it renders images)
       Kill            kill every running copy
@@ -36,12 +37,13 @@
     App-Smoke.ps1 -Scenario Inspect
     App-Smoke.ps1 -Scenario SetText -AutomationId 'UserBox' -Text 'admin'
     App-Smoke.ps1 -Scenario Invoke  -Name 'Save'
+    App-Smoke.ps1 -Scenario Hover   -AutomationId 'Card_1'
     App-Smoke.ps1 -Scenario Start -Exe ... -EnvVars @{ MYAPP_DATA_ROOT = 'C:\temp\data' }
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('Start', 'SecondInstance', 'Inspect', 'Keys', 'Invoke', 'SetText', 'Click', 'Screenshot', 'Kill')]
+    [ValidateSet('Start', 'SecondInstance', 'Inspect', 'Keys', 'Invoke', 'SetText', 'Click', 'Hover', 'Screenshot', 'Kill')]
     [string]$Scenario,
 
     # The executable to drive. Required for Start and SecondInstance; the other scenarios find the
@@ -65,14 +67,14 @@ param(
     # Keys: SendKeys syntax, e.g. '{DOWN}{ENTER}' or '1234{ENTER}'
     [string]$Send,
 
-    # Invoke/SetText: which element, by AutomationId (preferred) or by visible Name.
+    # Invoke/SetText/Hover: which element, by AutomationId (preferred) or by visible Name.
     [string]$AutomationId,
     [string]$Name,
 
     # SetText: the value to write into the element.
     [string]$Text,
 
-    # Click: absolute screen coordinates.
+    # Click, and Hover when no element is named: absolute screen coordinates.
     [int]$X,
     [int]$Y,
 
@@ -475,6 +477,51 @@ try {
             }
             catch { Add-Note "screenshot failed (non-fatal): $($_.Exception.Message)" }
             Add-Note "clicked ($X,$Y)"
+            $result.ok = $true
+        }
+
+        'Hover' {
+            # مثل Click تماماً لكن بلا ضغط: تُنقل الفأرة إلى مركز العنصر وتبقى هناك. هذا ما
+            # تحتاجه معاينةُ التحويم: حدث MouseEnter لا يصل إلاّ من مؤشّرٍ حقيقي، والضغطُ
+            # يفتح الفيديو بدل أن يعاينه.
+            if (-not ('Win32Fg' -as [type])) {
+                Add-Type -MemberDefinition $sig -Name 'Win32Fg' -Namespace '' | Out-Null
+            }
+            $p = Get-Process -Name $procName -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $p) { throw "no running copy of $procName" }
+            $p.Refresh()
+            if ($p.MainWindowHandle -ne 0) { Set-Foreground $p.MainWindowHandle }
+
+            $targetX = $X
+            $targetY = $Y
+            if ($AutomationId -or $Name) {
+                $el = Find-Element -ProcessId $p.Id -ById $AutomationId -ByName $Name
+                if (-not $el) { throw "no element matching id='$AutomationId' name='$Name'" }
+                $r = $el.Current.BoundingRectangle
+                if ($r.Width -le 0 -or $r.Height -le 0) {
+                    throw "element '$($el.Current.Name)' has no on-screen rectangle to hover"
+                }
+                $targetX = [int]($r.X + $r.Width / 2)
+                $targetY = [int]($r.Y + $r.Height / 2)
+                Add-Note "hover target '$($el.Current.Name)' at ($targetX,$targetY)"
+            }
+            elseif (-not $PSBoundParameters.ContainsKey('X') -and -not $PSBoundParameters.ContainsKey('Y')) {
+                throw 'pass -AutomationId, -Name, or -X/-Y for the Hover scenario'
+            }
+
+            # خطوتان: الأولى بعيدة عن الهدف كي يُطلَق MouseLeave لما كان تحت المؤشّر، ثمّ
+            # الاستقرار على الهدف. مؤشّرٌ يقفز داخل البطاقة نفسها لا يولّد MouseEnter جديداً.
+            [Win32Fg]::SetCursorPos(($targetX + 140), ($targetY + 140)) | Out-Null
+            Start-Sleep -Milliseconds 150
+            [Win32Fg]::SetCursorPos($targetX, $targetY) | Out-Null
+            Start-Sleep -Milliseconds 1500
+
+            try {
+                $shot = Join-Path $OutDir 'after-hover.png'
+                Save-Screenshot $shot; Add-Artifact $shot
+            }
+            catch { Add-Note "screenshot failed (non-fatal): $($_.Exception.Message)" }
+            Add-Note "hovered ($targetX,$targetY)"
             $result.ok = $true
         }
 

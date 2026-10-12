@@ -46,6 +46,24 @@ yourself before acting — the reviewer sees only the diff and the prompt, so a 
 because of something elsewhere in the repo can read as wrong to it. If the reviewer is mistaken, say
 so in your summary and `-Force` past it; do not silently delete the gate.
 
+## When a step stops at its audit (`AUDIT_FAILED`)
+
+The step's own work is committed and passed its gates; what failed is the fix for the audit's
+findings (twice), or the audit session returned nothing usable. Read:
+
+- `results/<Id>-audit.json` — the findings, each with a reproduction
+- `results/<Id>-fix.json` and `logs/<Id>/audit-fix-failure-*.txt` — what the fixer did and which gate it broke
+- `logs/<Id>/audit-fix-rollback-*.patch` — the fixer's last attempt, `git apply`-able
+
+Then one of:
+
+- **Re-run** — a new fix session tries again with the same findings (no new audit while HEAD has not moved).
+- **Fix by hand** — commit your fixes, then `-Only <Id> -NoAudit` to accept the step.
+- **Judge a finding wrong** — record why in `results/_orchestrator.json` `decisions[]`, then
+  `-Only <Id> -NoAudit`.
+
+Never accept a high-severity finding as unfixed without saying so in the report.
+
 ## Sign-off stops
 
 Tier D and E steps commit once their machine gates pass, then stop. The runner prints the prompt's
@@ -84,6 +102,7 @@ It has four sections that matter, all fed by the sessions' own structured output
 | مواضع خالف فيها الواقعُ البرومبت | `deviations[]` | where the prompt was wrong |
 | ما لم يُثبَت | `unverified[]` | the honest limit of what was proven |
 | خيارات وأعمال لاحقة | `followups[]` | what was deliberately left |
+| ما وجده التدقيق المستقل | `results/<Id>-audit.json` + `-fix.json` | every defect the audit found: fixed (with the test), dropped (with the reason), or not fixed |
 
 If those sections come back thin across a whole run, the sessions are under-reporting rather than the
 run being flawless. Push on it — a twenty-step run with no deviations and nothing unverified is not

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Build the Arabic HTML report for a prompt set.
 
@@ -77,13 +77,15 @@ foreach ($f in Get-ChildItem (Join-Path $SetRoot 'results') -Filter '*.json' -Er
     }
 }
 
-$done = 0; $failed = 0; $waiting = 0; $pending = 0; $cost = 0.0
+$done = 0; $failed = 0; $waiting = 0; $pending = 0; $cost = 0.0; $auditFixed = 0; $auditFailed = 0
 foreach ($p in $M.Prompts) {
     $st = if ($state -and $state.prompts.($p.Id)) { $state.prompts.($p.Id) } else { $null }
     switch ($st.status) {
-        'DONE' { $done++ } 'FAILED' { $failed++ } 'AWAITING_SIGNOFF' { $waiting++ } default { $pending++ }
+        'DONE' { $done++ } 'FAILED' { $failed++ } 'AUDIT_FAILED' { $failed++; $auditFailed++ }
+        'AWAITING_SIGNOFF' { $waiting++ } default { $pending++ }
     }
     if ($st.costUsd) { $cost += $st.costUsd }
+    if ($st.audit -and $st.audit.fixed) { $auditFixed += [int]$st.audit.fixed }
 }
 
 $statusWord = @{
@@ -92,6 +94,8 @@ $statusWord = @{
     AWAITING_SIGNOFF = 'بانتظار توقيعك'
     RUNNING          = 'قيد التنفيذ'
     PENDING          = 'لم يبدأ'
+    AUDITING         = 'قيد التدقيق'
+    AUDIT_FAILED     = 'توقّف عند التدقيق'
 }
 $statusWordEn = @{
     DONE             = 'done'
@@ -99,6 +103,8 @@ $statusWordEn = @{
     AWAITING_SIGNOFF = 'awaiting your sign-off'
     RUNNING          = 'running'
     PENDING          = 'not started'
+    AUDITING         = 'being audited'
+    AUDIT_FAILED     = 'stopped at the audit'
 }
 
 $sb = New-Object System.Text.StringBuilder
@@ -138,6 +144,10 @@ $null = $sb.AppendLine(@"
   .s-FAILED{background:var(--badbg);color:var(--bad)}
   .s-AWAITING_SIGNOFF{background:var(--warnbg);color:var(--warn)}
   .s-PENDING,.s-RUNNING{background:var(--idlebg);color:var(--idle)}
+  .s-AUDIT_FAILED{background:var(--badbg);color:var(--bad)}
+  .s-AUDITING{background:var(--warnbg);color:var(--warn)}
+  .item.idle{border-left-color:var(--line)}
+  .sev{font-size:12px;font-weight:700;margin-inline-start:6px}
   table{width:100%;border-collapse:collapse;background:var(--card);
         border:1px solid var(--line);border-radius:12px;overflow:hidden}
   th,td{padding:11px 14px;text-align:right;border-bottom:1px solid var(--line);vertical-align:top}
@@ -199,7 +209,10 @@ try {
 </script>
 "@)
 
-if ($failed -gt 0) {
+if ($auditFailed -gt 0) {
+    $null = $sb.AppendLine('<div class="note">' + (T 'توقّف التنفيذ عند تدقيق خطوة: الخطوة نفسها مُثبَتة في git، لكن إصلاح ما وجده التدقيق لم يجتز البوابات. العيوب مذكورة في قسم التدقيق أدناه.' 'The run stopped at a step''s audit: the step itself is committed, but the fixes for what the audit found did not pass the gates. The defects are listed in the audit section below.') + '</div>')
+}
+elseif ($failed -gt 0) {
     $null = $sb.AppendLine('<div class="note">' + (T 'توقّف التنفيذ عند خطوة فاشلة. لا شيء بعدها نُفِّذ، لأن ما يليها يعتمد عليها.' 'The run stopped at a failed step. Nothing after it ran, because the chain depends on it.') + '</div>')
 }
 elseif ($waiting -gt 0) {
@@ -215,6 +228,7 @@ $null = $sb.AppendLine(@"
   <div class="card"><div class="n">$waiting</div><div class="l">$(T 'بانتظار توقيعك' 'awaiting sign-off')</div></div>
   <div class="card"><div class="n">$failed</div><div class="l">$(T 'فشل' 'failed')</div></div>
   <div class="card"><div class="n">$pending</div><div class="l">$(T 'لم يبدأ' 'not started')</div></div>
+  <div class="card"><div class="n">$auditFixed</div><div class="l">$(T 'عيوب أصلحها التدقيق' 'defects fixed by the audit')</div></div>
   <div class="card"><div class="n">$([Math]::Round($cost,2))$</div><div class="l">$(T 'كلفة الجلسات' 'session cost')</div></div>
 </div>
 "@)
@@ -248,11 +262,65 @@ foreach ($p in $M.Prompts) {
     $titleAr = [string](ArOf $r 'title')
     $titleCell = if ($titleAr) { "<span class=""en"">$(Esc $p.Title)</span><span class=""ar"">$(Esc $titleAr)</span>" }
                  else { "<span class=""en keep"">$(Esc $p.Title)</span>" }
+    $audLine = ''
+    if ($st.audit -and $st.audit.status) {
+        $a = $st.audit
+        $audLine = switch ($a.status) {
+            'skipped'     { T "التدقيق: لم يُجرَ — $(Esc $a.why)" "audit: skipped - $(Esc $a.why)" }
+            'clean'       { T 'التدقيق: لم يجد عيوباً' 'audit: no defects found' }
+            'all-dropped' { T "التدقيق: $($a.findings) ملاحظة، لم تتأكّد أيٌّ منها باختبار" "audit: $($a.findings) finding(s), none reproduced" }
+            'fixed'       { T "التدقيق: وجد $($a.findings)، أُصلح $($a.fixed)، أُسقط $($a.dropped)" "audit: found $($a.findings), fixed $($a.fixed), dropped $($a.dropped)" }
+            'fix-failed'  { T "التدقيق: وجد $($a.findings) ولم ينجح إصلاحها" "audit: found $($a.findings), the fixes failed" }
+            default       { T "التدقيق: $(Esc $a.status)" "audit: $(Esc $a.status)" }
+        }
+        $audLine = "<p class=""sub"" style=""margin:6px 0 0"">$audLine</p>"
+    }
+    $fixSha = if ($st.audit -and $st.audit.fixCommit) { '<br><code>' + $st.audit.fixCommit.Substring(0,8) + '</code>' } else { '' }
     $null = $sb.AppendLine("<tr><td>$i</td><td><span class=""pill s-$s"">$word</span></td>" +
         "<td><strong>$(Esc $p.Id)</strong><br>$titleCell</td>" +
-        "<td>$(Bi $sumEn $sumAr)</td><td>$sha</td></tr>")
+        "<td>$(Bi $sumEn $sumAr)$audLine</td><td>$sha$fixSha</td></tr>")
 }
 $null = $sb.AppendLine('</table>')
+
+# ---- the independent audit
+# Fed by results/<Id>-audit.json (the auditor's findings) and results/<Id>-fix.json (what the fix
+# session reproduced and fixed, or dropped and why). A set run before the audit existed has neither
+# and renders no section.
+$audBlock = New-Object System.Text.StringBuilder
+$anyAudit = $false
+foreach ($p in $M.Prompts) {
+    $st = if ($state -and $state.prompts.($p.Id)) { $state.prompts.($p.Id) } else { $null }
+    $af = $results["$($p.Id)-audit"]
+    if (-not $af -or -not @($af.findings | Where-Object { $_ }).Count) { continue }
+    $fx = $results["$($p.Id)-fix"]
+    $fixedIds = @{}; foreach ($x in @($fx.fixed | Where-Object { $_ })) { $fixedIds[[string]$x.id] = $x }
+    $dropIds = @{};  foreach ($x in @($fx.dropped | Where-Object { $_ })) { $dropIds[[string]$x.id] = $x }
+    $failedFix = $st -and $st.audit -and $st.audit.status -eq 'fix-failed'
+    foreach ($f in @($af.findings | Where-Object { $_ })) {
+        $anyAudit = $true
+        $fid = [string]$f.id
+        $where = if ($f.line) { "$($f.file):$($f.line)" } else { [string]$f.file }
+        if ($fixedIds.ContainsKey($fid) -and -not $failedFix) {
+            $cls = 'item'; $tag = T 'أُصلح' 'fixed'
+            $extra = (T 'اختبار يُثبته: ' 'proven by: ') + '<code>' + (Esc $fixedIds[$fid].test) + '</code>'
+        }
+        elseif ($dropIds.ContainsKey($fid) -and -not $failedFix) {
+            $cls = 'item idle'; $tag = T 'أُسقط' 'dropped'
+            $extra = (T 'السبب: ' 'why: ') + (Esc $dropIds[$fid].reason)
+        }
+        else {
+            $cls = 'item bad'; $tag = T 'لم يُصلَح' 'NOT fixed'
+            $extra = (T 'الإصلاح المقترح: ' 'suggested fix: ') + (Esc $f.suggested_fix)
+        }
+        $null = $audBlock.AppendLine("<div class=""$cls""><div class=""id"">$(Esc $p.Id) · $(Esc $fid) <span class=""sev"">$(Esc $f.severity)</span> · $tag</div>" +
+            "<div class=""en keep""><strong>$(Esc $f.title)</strong> — <code>$(Esc $where)</code><br>$(Esc $f.problem)<br><span class=""sub"">$extra</span></div></div>")
+    }
+}
+if ($anyAudit) {
+    $null = $sb.AppendLine('<h2>' + (T 'ما وجده التدقيق المستقل' 'What the independent audit found') + '</h2>')
+    $null = $sb.AppendLine('<p class="sub">' + (T 'بعد أن اجتازت كل خطوة بواباتها، قرأتها جلسة مستقلة للقراءة فقط بحثاً عن عيوب حقيقية. كل عيب أُعيد إنتاجه أولاً باختبار يفشل ثم أُصلح في commit منفصل؛ وما تعذّر إثباته أُسقط مع السبب.' 'After each step passed its gates, an independent read-only session hunted it for real defects. Each one was first reproduced by a failing test, then fixed in its own commit; what could not be reproduced was dropped, with the reason.') + '</p>')
+    $null = $sb.Append($audBlock.ToString())
+}
 
 # ---- decisions taken without asking
 $anyDecisions = $false

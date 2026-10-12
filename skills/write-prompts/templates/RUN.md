@@ -19,7 +19,9 @@ Do not finish while anything is broken. Before you tell me you are done: every p
 build and tests green, the app starting clean if this set drives one, and report.html regenerated.
 If you cannot get there, say so in your first sentence.
 
-Fix real defects you find along the way, in their own commits separate from the prompt commits.
+The runner audits every committed step itself and lands its fixes in fix(Pxx-audit) commits; do not
+run a second audit on top of it. When a step stops at its audit, act on its findings. Fix any other
+real defect you find along the way in its own commit, separate from the prompt commits.
 
 Hand me the path to report.html at the end.
 ```
@@ -34,6 +36,7 @@ Hand me the path to report.html at the end.
 | Stops for me | `<P.. , P..>` — `<what each one needs>` |
 | Chains | `<P01→P02→P03>` |
 | Reorderable | `<P04, P07>` |
+| Audit | `<every step>` / `<every step except P.. (reason)>` |
 
 ## Before starting
 
